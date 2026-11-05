@@ -1,32 +1,28 @@
 # AI Usage Reflection
 
-I used Claude Code in the terminal to work directly on the assignment repository.
-
 ## Where and for What I Used AI
 
-AI helped implement the initial client and WebSocket server code, including the sender thread pool, swipe generator and producer, WebSocket subscriber, per-swipe records, CSV output, and dummy leaderboard endpoint. I later used Claude Code to audit the implementation against the assignment requirements, restructure the Maven project, add client statistics, verify push-latency measurement, debug connection issues, and refine the documentation.
-
-The initial implementation conversations were not saved. The available transcript covers later auditing and debugging.
+- **Ingest server and channel pool:** Claude Code implemented `SwipeEventPublisher` and `ChannelPool` in `/server-v2`: one connection, borrowed and returned channels with publisher confirms, one retry on a fresh channel, and reconnection. Later it added an `x-publish-ms` header to each published swipe so consumer lag could be measured.
+- **Consumer aggregation:** Claude Code generated the first version of the consumer (`ConsumerPool`, `ResortWorker`, `LeaderboardAggregator`, `TopN`). It split the work into many small classes; I had it merge them, then checked that de-duplication by `eventId`, broadcasting, reject-to-DLQ and the counters were still there.
+- **Backplane / fanout wiring:** Claude Code wired the `skitrak.leaderboard` fanout exchange and `LeaderboardRelay`, which gives each server its own relay queue.
+- **Tuning and monitoring scripts:** Claude Code wrote the scripts in `/monitoring` (`queue_monitor.py`, `host_monitor.py`, `cloudwatch_fetch.py`, `run_test.py`, `summarize.py`), added `LagStats` and a `/lag` endpoint to the consumer, and ran the tuning rounds (client threads, consumer threads, prefetch, batch ACK, channel pool) and the 1/2/4-server and 1M tests on EC2.
+- **ALB and testing on AWS:** I registered and deregistered servers in the ALB target group by hand between runs, because Claude Code's AWS access was blocked, and took the RabbitMQ and ALB screenshots myself.
 
 ## Suggestions I Accepted
 
-- **Adding connection statistics.** Claude Code tested 250 requests against local Tomcat and observed that keep-alive connections were closed after every 100 requests. I accepted its proposal to track connection and reconnection statistics, while treating the results as estimates rather than exact TCP connection counts.
-- **Recording one `SwipeRecord` per swipe.** Claude Code reviewed the relevant call sites and helped add per-swipe records to client-part2. Each record captures latency, including retries, and final status. I accepted this because the latency statistics, per-resort throughput, CSV export, and chart depend on per-swipe data. I verified the change with a local run.
+- **Broadcast backplane with one relay queue per server.** Claude Code proposed publishing full Top-N snapshots to a fanout exchange, with each server consuming its own exclusive, auto-delete relay queue. I accepted it because the ALB can then balance requests freely while every subscriber still gets every update. I verified it with a controlled test: two swipes sent directly to server1 produced boards of 397 and then 741 ft at a subscriber connected to server3.
+- **Best-effort leaderboard broadcast.** The consumer acks a swipe once it is applied, even if publishing the board fails. I kept this after reasoning it through: a redelivered swipe would be skipped as a duplicate, so retrying would not re-send the board, and the next board is a full snapshot anyway.
 
 ## Suggestions I Rejected or Corrected
 
-- **Connection counts presented as exact numbers.** Because workers share an `HttpClient` and may reuse each other's connections, the reported counts could not accurately represent actual TCP connection opens. I required the output to label them as estimates and explain this limitation.
-- **The total workload.** Claude Code questioned whether 500,000 swipes included warmup. Based on the instructor's clarification, I used 32,000 warmup swipes plus 500,000 main-phase swipes, for 532,000 total, and updated the documentation and reporting accordingly.
+- **Pinning the consumer thread count for the final run.** Claude Code proposed setting MIN equal to MAX for the final validation run. I rejected this because the assignment requires dynamic scaling, and had it use MIN=5, MAX=10 so the autoscaler could actually change the thread count.
+- **Reporting an estimate as consumer lag.** Claude Code's first queue monitor reported `est_lag_ms`, computed as queue depth ÷ ack rate, as the consumer lag. That only estimates how long a backlog takes to drain; it does not measure how long a message actually waited. I had it measure real lag instead, from a publish timestamp header on each swipe to the start of processing, and rename the estimate to a drain-time figure that is never reported as lag.
 
-## What the AI Got Wrong
+## What the AI Got Wrong, and Decisions I Reasoned Through Myself
 
-- **Incorrect retry behavior in the README.** AI-generated documentation claimed the client kept retrying while the server was unreachable. I checked `SwipeWorker` and found that each swipe makes one initial attempt plus five retries before being marked as failed. I corrected the README to reflect the actual implementation.
+- **The connection-locality comparison.** When I asked Claude to compare the backplane with co-location, it described co-location as each server aggregating only its own swipes, then argued against that. The assignment defines co-location as partitioning by resort. I compared the backplane with resort partitioning instead: it would need per-resort routing rules, cap scaling at 10 nodes, and make failover harder.
+- **Per-resort ordering and consumer concurrency.** Single-active-consumer allows one active consumer per resort queue, so consumer threads beyond 10 are standbys and add no capacity. Ordering per resort therefore caps parallelism at the number of resorts, which is why I compared server counts with the same 10 active consumers.
 
-## Decisions I Reasoned Through Myself
+## Transcripts
 
-- **Little's Law and thread-pool sizing.** Using an average warm-request RTT of 21.71 ms, Little's Law predicted 1,474 swipes/s for 32 workers and 18,422 swipes/s for 400 workers. Measured throughputs were 1,415.9 and 10,590.8 swipes/s, respectively. In a separate comparison, increasing main-phase workers from 400 to 420 improved throughput by only 0.22%, while connection errors increased from 111 to 164. I chose 400 workers because the additional concurrency offered little benefit and more connection errors.
-- **Negative push latency.** The median push latency was −47 ms. I reasoned that clock skew between the client and server was a likely explanation, rather than interpreting it as a real negative network delay.
-
-## Transcript
-
-- Claude Code: `transcripts/claude-code-session.txt`
+- Claude Code: `transcripts/`

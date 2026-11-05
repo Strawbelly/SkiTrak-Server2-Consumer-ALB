@@ -1,0 +1,32 @@
+{
+  "region": "us-west-2",
+  "alb_name": "ski-ingest-alb",
+  "target_group": "ski-ingest-tg",
+
+  "client_jar": "../client-part2/target/ski-client-part2-1.0-SNAPSHOT.jar",
+
+  "rabbit": {
+    "api": "http://172.31.44.149:15672",
+    "user": "guest",
+    "password": "guest",
+    "vhost": "/"
+  },
+  "consumer_health": "http://172.31.42.186:8081",
+
+  "ssh": {
+    "user": "ec2-user",
+    "key": "~/.ssh/your-key.pem",
+    "options": ["-o", "StrictHostKeyChecking=accept-new"]
+  },
+  "remote_dir": "/tmp/skitrak-monitor",
+  "access_log_glob": "~/apache-tomcat-*/logs/localhost_access_log.*.txt",
+
+  "hosts": [
+    {"name": "server1",  "role": "ingest",   "address": "172.31.44.0"},
+    {"name": "server2",  "role": "ingest",   "address": "172.31.37.24"},
+    {"name": "server3",  "role": "ingest",   "address": "172.31.46.123"},
+    {"name": "server4",  "role": "ingest",   "address": "172.31.37.7"},
+    {"name": "consumer", "role": "consumer", "address": "172.31.42.186"},
+    {"name": "rabbitmq", "role": "rabbitmq", "address": "172.31.44.149"}
+  ]
+}
